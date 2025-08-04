@@ -1,35 +1,58 @@
 from fastapi import FastAPI
 import json
+from dotenv import load_dotenv
+import os
+import requests
+
+load_dotenv()
 
 app = FastAPI()
+
 
 class TaskStorage:
 
     def __init__(self):
         self.dict_of_tasks = {}
         self.tasks_id_counter = 0
-        self.FILE_PATH = "task_storage.json"
+        self.filename = "task_storage.json"
 
-        self.load_tasks_from_file()
+        self.GIST_ID = os.getenv("GIST_ID")
+        self.GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+        self.url = f"https://api.github.com/gists/{self.GIST_ID}"
+        self.headers = {"Authorization": f"token {self.GITHUB_TOKEN}"}
+        self.load_tasks_from_gist()
 
 
-    def load_tasks_from_file(self) -> None:
-        try:
-            with open(self.FILE_PATH, "r", encoding="utf-8") as file:
-                data = json.load(file)
+    def load_tasks_from_gist(self) -> None:
+        response = requests.get(self.url, headers=self.headers)
+        if response.status_code == 200:
+            content = json.loads(response.json()["files"][self.filename]["content"])
+            try:
+                data = json.loads(content)
                 self.dict_of_tasks = {int(k): v for k, v in data.get("tasks", {}).items()}
                 self.tasks_id_counter = data.get("counter", 0)
-        except FileNotFoundError:
-            self.save_tasks_to_file()
+            except json.JSONDecodeError:
+                self.dict_of_tasks = {}
+                self.tasks_id_counter = 0
+                self.save_tasks_to_gist()
 
 
-    def save_tasks_to_file(self) -> None:
-        with open(self.FILE_PATH, "w", encoding="utf-8") as file:
-            json.dump({
-                "tasks": self.dict_of_tasks,
-                "counter": self.tasks_id_counter
-            }, file, ensure_ascii=False, indent=2)
-    
+    def save_tasks_to_gist(self) -> None:
+        load_data = {
+            "files": {
+                self.filename: {
+                    "content": json.dumps({
+                        "tasks": self.dict_of_tasks,
+                        "counter": self.tasks_id_counter
+                    }, ensure_ascii=False, indent=2)
+                }
+            }
+        }
+        response = requests.patch(self.url, headers=self.headers, json=load_data)
+        if response.status_code != 200:
+            raise Exception(f"Failed to update Gist: {response.status_code} {response.text}")
+
 
     def storage_get(self) -> dict[int, dict[str, str]]:
         return self.dict_of_tasks
@@ -38,7 +61,7 @@ class TaskStorage:
     def storage_create(self, task: str, status: str = "--New task--") -> dict:
         if task not in {t["task"] for t in self.dict_of_tasks.values()}:
             self.dict_of_tasks[self.tasks_id_counter] = {"task" : task, "status" : status}
-            self.save_tasks_to_file()
+            self.save_tasks_to_gist()
             self.tasks_id_counter += 1
             return {
                 "task_id": self.tasks_id_counter - 1,
@@ -51,7 +74,7 @@ class TaskStorage:
     def storage_update(self, task_id: int, task: str, status: str = "--Updated task--") -> dict:
         if task_id in self.dict_of_tasks:
             self.dict_of_tasks[task_id] = {"task" : task, "status" : status}
-            self.save_tasks_to_file()
+            self.save_tasks_to_gist()
             return {
                 "task_id": task_id,
                 "task": task,
@@ -63,7 +86,7 @@ class TaskStorage:
     def storage_delete(self, task_id: int) -> dict:
         if task_id in self.dict_of_tasks:
             deleted_task = self.dict_of_tasks.pop(task_id)
-            self.save_tasks_to_file()
+            self.save_tasks_to_gist()
             return {
                 "task_id": task_id,
                 "task": deleted_task["task"],
