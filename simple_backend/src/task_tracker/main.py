@@ -27,7 +27,7 @@ class TaskStorage:
     def load_tasks_from_gist(self) -> None:
         response = requests.get(self.url, headers=self.headers)
         if response.status_code == 200:
-            content = json.loads(response.json()["files"][self.filename]["content"])
+            content = response.json()["files"][self.filename]["content"]
             try:
                 data = json.loads(content)
                 self.dict_of_tasks = {int(k): v for k, v in data.get("tasks", {}).items()}
