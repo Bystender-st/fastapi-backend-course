@@ -8,6 +8,31 @@ load_dotenv()
 
 app = FastAPI()
 
+class CloudflareLLM:
+    def __init__(self):
+        self.account_id =os.getenv("CLOUDFLARE_ACCOUNT_ID")
+        self.api_token = os.getenv("CLOUDFLARE_API_TOKEN")
+        self.model = "@cf/meta/llama-3-8b-instruct"
+        self.url = f"https://api.cloudflare.com/client/v4/accounts/{self.account_id}/ai/run/{self.model}"
+        self.headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json",
+        }
+    
+    def ask_model(self, task_text: str) -> str:
+        prompt = f"Как решить задачу: {task_text}?"
+        payload = {
+            "messages": [
+            {"role": "system", "content": "Ты помощник, который объясняет, как решать задачи."},
+            {"role": "user", "content": task_text}
+            ]
+        }
+        response = requests.post(self.url, headers=self.headers, json=payload)
+        if response.status_code == 200:
+            return response.json()["result"]["response"]
+        else:
+            raise Exception(f"Cloudflare API Error: {response.status_code} {response.text}")
+        
 
 class TaskStorage:
 
@@ -18,10 +43,12 @@ class TaskStorage:
 
         self.GIST_ID = os.getenv("GIST_ID")
         self.GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-
         self.url = f"https://api.github.com/gists/{self.GIST_ID}"
         self.headers = {"Authorization": f"token {self.GITHUB_TOKEN}"}
+
         self.load_tasks_from_gist()
+
+        self.llm = CloudflareLLM()
 
 
     def load_tasks_from_gist(self) -> None:
@@ -60,16 +87,23 @@ class TaskStorage:
 
     def storage_create(self, task: str, status: str = "--New task--") -> dict:
         if task not in {t["task"] for t in self.dict_of_tasks.values()}:
-            self.dict_of_tasks[self.tasks_id_counter] = {"task" : task, "status" : status}
+            if not task.strip():
+                return {"error": "Task text cannot be empty"}
+            try:
+                explanation = self.llm.ask_model(task)
+                task_with_explanation = f"{task}\n\nAI Suggestion: {explanation}"
+            except Exception as e:
+                task_with_explanation = f"{task}\n\n[AI Error: {e}]"
+            self.dict_of_tasks[self.tasks_id_counter] = {"task" : task_with_explanation, "status" : status}
             self.save_tasks_to_gist()
             self.tasks_id_counter += 1
             return {
                 "task_id": self.tasks_id_counter - 1,
-                "task": task,
+                "task": task_with_explanation,
                 "status": status,
                 }
         else:
-            return f"Task: {task} already exist!"
+            return {"error": f"Task '{task}' already exists!"}
     
     def storage_update(self, task_id: int, task: str, status: str = "--Updated task--") -> dict:
         if task_id in self.dict_of_tasks:
@@ -81,7 +115,7 @@ class TaskStorage:
                 "status": status,
                 }
         else:
-            return f"Error, task with id[{task_id}] not found!"
+            return {"error": f"task with id[{task_id}] not found!"}
         
     def storage_delete(self, task_id: int) -> dict:
         if task_id in self.dict_of_tasks:
@@ -93,7 +127,7 @@ class TaskStorage:
                 "status": "Deleted",
                 }
         else:
-            return f"Error, task with id[{task_id}] not found!"
+            return {"error": f"task with id[{task_id}] not found!"}
     
 t = TaskStorage()
 
